@@ -26,6 +26,7 @@ The speech system uses per-project files in `~/.claude/projects/<project-dir>/`:
 
 The project directory name is derived from the CWD by replacing `:` `\` `/` with `-`.
 Example: `C:\Projects\MyApp` → `C--Projects-MyApp`
+Example: `/home/user/myapp` → `-home-user-myapp`
 
 ## Available Voices (Top Picks)
 
@@ -38,35 +39,64 @@ Example: `C:\Projects\MyApp` → `C--Projects-MyApp`
 | Jenny | Female | US | `en-US-JennyNeural` |
 | Sonia | Female | UK | `en-GB-SoniaNeural` |
 
-For the full list, run: `python -m edge_tts --list-voices`
+For the full list, run: `python3 -m edge_tts --list-voices`
 
 ## Instructions
 
 When this skill is invoked, determine the current project directory and encoded name:
-- CWD example: `C:\Projects\MyApp`
-- Encoded: `C--Projects-MyApp`
-- Config dir: `~/.claude/projects/C--Projects-MyApp/`
+- CWD example: `C:\Projects\MyApp` → Encoded: `C--Projects-MyApp`
+- CWD example: `/home/user/myapp` → Encoded: `-home-user-myapp`
+- Config dir: `~/.claude/projects/<ENCODED>/`
 
 ### `/speak` (no args) — Toggle
+
+**Windows (PowerShell):**
 ```powershell
 $flagFile = "$env:USERPROFILE\.claude\projects\<ENCODED>\speech-paused"
 if (Test-Path $flagFile) {
     Remove-Item $flagFile -Force
     # Speech is now ON
 } else {
-    New-Item $flagFile -ItemType File -Force
+    New-Item $flagFile -ItemType File -Force | Out-Null
     # Speech is now OFF
 }
 ```
 
+**Linux/macOS (Bash):**
+```bash
+FLAG_FILE="$HOME/.claude/projects/<ENCODED>/speech-paused"
+if [ -f "$FLAG_FILE" ]; then
+    rm "$FLAG_FILE"
+    # Speech is now ON
+else
+    touch "$FLAG_FILE"
+    # Speech is now OFF
+fi
+```
+
 ### `/speak on`
+
+**Windows (PowerShell):**
 ```powershell
 Remove-Item "$env:USERPROFILE\.claude\projects\<ENCODED>\speech-paused" -Force -ErrorAction SilentlyContinue
 ```
 
+**Linux/macOS (Bash):**
+```bash
+rm -f "$HOME/.claude/projects/<ENCODED>/speech-paused"
+```
+
 ### `/speak off`
+
+**Windows (PowerShell):**
 ```powershell
-New-Item "$env:USERPROFILE\.claude\projects\<ENCODED>\speech-paused" -ItemType File -Force
+New-Item "$env:USERPROFILE\.claude\projects\<ENCODED>\speech-paused" -ItemType File -Force | Out-Null
+```
+
+**Linux/macOS (Bash):**
+```bash
+mkdir -p "$HOME/.claude/projects/<ENCODED>"
+touch "$HOME/.claude/projects/<ENCODED>/speech-paused"
 ```
 
 ### `/speak status`
@@ -74,19 +104,49 @@ Check both `speech-paused` and `speech-voice` files. Report:
 - Speech: ON/OFF
 - Voice: <current voice or "default (en-US-GuyNeural)">
 
+**Windows (PowerShell):**
+```powershell
+$configDir = "$env:USERPROFILE\.claude\projects\<ENCODED>"
+$paused = Test-Path "$configDir\speech-paused"
+$voice = if (Test-Path "$configDir\speech-voice") { Get-Content "$configDir\speech-voice" } else { "default (en-US-GuyNeural)" }
+```
+
+**Linux/macOS (Bash):**
+```bash
+CONFIG_DIR="$HOME/.claude/projects/<ENCODED>"
+PAUSED=$([ -f "$CONFIG_DIR/speech-paused" ] && echo "OFF" || echo "ON")
+VOICE=$(cat "$CONFIG_DIR/speech-voice" 2>/dev/null || echo "default (en-US-GuyNeural)")
+```
+
 ### `/speak voices`
-Show the voice table above. Mention that `python -m edge_tts --list-voices` shows all available voices.
+Show the voice table above. Mention that `python3 -m edge_tts --list-voices` shows all available voices.
 
 ### `/speak voice <name>`
 Write the voice name to the config file:
+
+**Windows (PowerShell):**
 ```powershell
 Set-Content "$env:USERPROFILE\.claude\projects\<ENCODED>\speech-voice" "<VOICE_NAME>" -NoNewline
 ```
+
+**Linux/macOS (Bash):**
+```bash
+mkdir -p "$HOME/.claude/projects/<ENCODED>"
+printf '%s' "<VOICE_NAME>" > "$HOME/.claude/projects/<ENCODED>/speech-voice"
+```
+
 The change takes effect on the next spoken message (no restart needed).
 
 ### `/speak voice reset`
+
+**Windows (PowerShell):**
 ```powershell
 Remove-Item "$env:USERPROFILE\.claude\projects\<ENCODED>\speech-voice" -Force -ErrorAction SilentlyContinue
+```
+
+**Linux/macOS (Bash):**
+```bash
+rm -f "$HOME/.claude/projects/<ENCODED>/speech-voice"
 ```
 
 ### Response format

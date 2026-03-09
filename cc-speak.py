@@ -77,8 +77,67 @@ RE_TOOL_INVOKE = re.compile(r"^\s*(?:Read|Write|Edit|Bash|Glob|Grep|Task|TodoWri
 # Cost/token summary patterns
 RE_COST = re.compile(r"^\s*(?:Cost|Tokens?|Input|Output|Cache)[\s:]+[\d$.,]+.*$", re.MULTILINE | re.IGNORECASE)
 
+# ─── Code Block & Tool Call Filtering ─────────────────────────────────────────
 
-def clean_text(raw: str, skip_code: bool = True, skip_paths: bool = True) -> str:
+# Fenced code blocks (``` ... ```)
+RE_FENCED_CODE = re.compile(r"```[^\n]*\n.*?```", re.DOTALL)
+
+# Indented code blocks (4+ spaces, 3+ consecutive lines)
+RE_INDENTED_CODE = re.compile(r"(?:^[ \t]{4,}\S.*\n){3,}", re.MULTILINE)
+
+# JSON blocks (tool call outputs) — objects/arrays spanning multiple lines
+RE_JSON_BLOCK = re.compile(r"^\s*[\[{][\s\S]*?[\]}]\s*$", re.MULTILINE)
+
+# Tool call output sections (e.g., "Read(...)" followed by indented content)
+RE_TOOL_OUTPUT_SECTION = re.compile(
+    r"^\s*⎿?\s*(?:Read|Write|Edit|Bash|Glob|Grep|Task|TodoWrite|Search)\s*\(.*\).*(?:\n(?:[ \t]+.*|\s*))*",
+    re.MULTILINE,
+)
+
+# Standalone URLs (http/https/ftp)
+RE_STANDALONE_URL = re.compile(r"(?:^|\s)(?:https?|ftp)://\S+", re.MULTILINE)
+
+# File path lines (lines that are primarily a file path with optional line numbers)
+RE_PATH_LINE = re.compile(
+    r"^\s*(?:[A-Za-z]:)?(?:[/\\][\w.\-]+){2,}(?::\d+(?::\d+)?)?\s*$", re.MULTILINE
+)
+
+# Command output patterns ($ command ... or > command ...)
+RE_COMMAND_OUTPUT = re.compile(r"^\s*[$>]\s+\S+.*$", re.MULTILINE)
+
+
+def filter_non_speech_content(text: str) -> str:
+    """Remove code blocks, tool outputs, JSON, file paths, URLs, and command outputs.
+
+    This filter runs BEFORE clean_text() to strip large non-speech blocks that
+    would otherwise leave behind noisy residue.
+    """
+    # Remove fenced code blocks entirely (not just collapse to [code block])
+    text = RE_FENCED_CODE.sub("", text)
+
+    # Remove indented code blocks
+    text = RE_INDENTED_CODE.sub("", text)
+
+    # Remove tool output sections
+    text = RE_TOOL_OUTPUT_SECTION.sub("", text)
+
+    # Remove JSON blocks (multi-line objects/arrays)
+    text = RE_JSON_BLOCK.sub("", text)
+
+    # Remove lines that are just file paths
+    text = RE_PATH_LINE.sub("", text)
+
+    # Remove standalone URLs
+    text = RE_STANDALONE_URL.sub("", text)
+
+    # Remove command output lines
+    text = RE_COMMAND_OUTPUT.sub("", text)
+
+    return text
+
+
+def clean_text(raw: str, skip_code: bool = True, skip_paths: bool = True,
+               filter_tool_output: bool = True) -> str:
     """Strip terminal formatting and noise from Claude Code output for natural speech."""
     text = raw
 
@@ -111,12 +170,16 @@ def clean_text(raw: str, skip_code: bool = True, skip_paths: bool = True) -> str
     # Strip decorative lines
     text = RE_DECORATIVE_LINE.sub("", text)
 
+    # Filter non-speech content (code blocks, tool outputs, JSON, etc.)
+    if filter_tool_output:
+        text = filter_non_speech_content(text)
+
     # Optionally strip file paths (they sound awful read aloud)
     if skip_paths:
         text = RE_WIN_PATH.sub(" ", text)
         text = RE_FILE_PATH.sub(" ", text)
 
-    # Optionally collapse code blocks
+    # Optionally collapse remaining code blocks
     if skip_code:
         # Fenced code blocks (```...```) — greedy match between fences
         text = re.sub(
@@ -137,37 +200,37 @@ def clean_text(raw: str, skip_code: bool = True, skip_paths: bool = True) -> str
 
     # --- Markdown and formatting cleanup for natural speech ---
 
-    # Markdown links [text](url) → just the text
+    # Markdown links [text](url) -> just the text
     text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
 
-    # Markdown images ![alt](url) → remove entirely
+    # Markdown images ![alt](url) -> remove entirely
     text = re.sub(r"!\[[^\]]*\]\([^)]+\)", "", text)
 
     # Markdown bold/italic: **text**, __text__, *text*, _text_
     text = re.sub(r"\*{1,3}([^*]+)\*{1,3}", r"\1", text)
     text = re.sub(r"_{1,3}(\S[^_]*\S)_{1,3}", r"\1", text)
 
-    # Markdown headers (# Header) → just the text
+    # Markdown headers (# Header) -> just the text
     text = re.sub(r"^#{1,6}\s+", "", text, flags=re.MULTILINE)
 
     # Markdown horizontal rules
     text = re.sub(r"^[\-*_]{3,}\s*$", "", text, flags=re.MULTILINE)
 
-    # Markdown bullet points: - item, * item → just the text
+    # Markdown bullet points: - item, * item -> just the text
     text = re.sub(r"^[\s]*[-*+]\s+", "", text, flags=re.MULTILINE)
 
-    # Numbered lists: 1. item → just the text
+    # Numbered lists: 1. item -> just the text
     text = re.sub(r"^[\s]*\d+[.)]\s+", "", text, flags=re.MULTILINE)
 
     # HTML tags that might appear
     text = re.sub(r"<[^>]+>", "", text)
 
-    # URLs (standalone) → skip them
+    # URLs (standalone) -> skip them
     text = re.sub(r"https?://\S+", "", text)
 
-    # Arrow characters → natural words
-    text = text.replace("→", " to ")
-    text = text.replace("←", " from ")
+    # Arrow characters -> natural words
+    text = text.replace("\u2192", " to ")
+    text = text.replace("\u2190", " from ")
     text = text.replace("=>", " to ")
     text = text.replace("->", " to ")
     text = text.replace(">>", " ")
@@ -180,24 +243,27 @@ def clean_text(raw: str, skip_code: bool = True, skip_paths: bool = True) -> str
     text = text.replace("@", " at ")
     text = text.replace("~", " ")
 
-    # Underscores in identifiers (snake_case → "snake case")
+    # Underscores in identifiers (snake_case -> "snake case")
     # Only for words that look like identifiers (letters/digits with underscores)
     text = re.sub(r"\b(\w+)_(\w+)\b", lambda m: m.group(0).replace("_", " ") if not m.group(0).startswith("__") else m.group(0), text)
 
-    # Dots in qualified names (e.g., "item.image_url") → spaces
-    # But preserve decimal numbers and ellipsis
-    text = re.sub(r"(?<![0-9])\.(?=[a-zA-Z])", " ", text)
+    # Dots in qualified names (e.g., "item.image_url") -> spaces
+    # But preserve decimal numbers, ellipsis, and abbreviations (Dr., U.S.A., etc.)
+    # Only replace dots between lowercase identifier segments (not after uppercase/digits)
+    text = re.sub(r"(?<=[a-z])\.(?=[a-z])", " ", text)
 
     # Parenthetical references like (line 42) or (file.php:123) - keep meaningful ones
     text = re.sub(r"\([^)]*\.\w+:\d+\)", "", text)
 
     # Strip standalone special chars: $, ^, ~, `, \
+    # But be careful not to strip $ before digits (e.g. "$5") or ^ in math
     text = re.sub(r"(?<!\w)[\\$^`~](?!\w)", " ", text)
 
     # Curly braces, square brackets (outside of already-handled markdown)
     text = re.sub(r"[{}\[\]]", " ", text)
 
     # Multiple punctuation (... is ok, but ---- or ==== etc.)
+    # Preserve plus signs so "C++", "g++", etc. stay intact
     text = re.sub(r"([=\-_]){2,}", " ", text)
 
     # Collapse multiple spaces
@@ -218,7 +284,8 @@ def clean_text(raw: str, skip_code: bool = True, skip_paths: bool = True) -> str
 # ─── TTS Backends ─────────────────────────────────────────────────────────────
 
 
-async def tts_edge_async(text: str, voice: str, rate: str, output_path: str) -> str:
+async def tts_edge_async(text: str, voice: str, rate: str, output_path: str,
+                         volume: int = 100) -> str:
     """Generate speech using edge-tts (free)."""
     try:
         import edge_tts
@@ -226,8 +293,12 @@ async def tts_edge_async(text: str, voice: str, rate: str, output_path: str) -> 
         print("ERROR: edge-tts not installed. Run: pip install edge-tts", file=sys.stderr)
         sys.exit(1)
 
+    # Convert volume 0-100 to edge-tts volume string (-100% to +0%)
+    # edge-tts volume: -100% (silent) to +0% (full volume)
+    volume_str = f"{volume - 100}%" if volume < 100 else "+0%"
+
     try:
-        communicate = edge_tts.Communicate(text, voice, rate=rate)
+        communicate = edge_tts.Communicate(text, voice, rate=rate, volume=volume_str)
         await communicate.save(output_path)
     except Exception as e:
         err = str(e)
@@ -240,12 +311,23 @@ async def tts_edge_async(text: str, voice: str, rate: str, output_path: str) -> 
     return output_path
 
 
-def tts_edge(text: str, voice: str, rate: str, output_path: str) -> str:
-    """Sync wrapper for edge-tts."""
-    return asyncio.run(tts_edge_async(text, voice, rate, output_path))
+def tts_edge(text: str, voice: str, rate: str, output_path: str,
+             volume: int = 100, loop: asyncio.AbstractEventLoop = None) -> str:
+    """Sync wrapper for edge-tts.
+
+    When called from a worker thread, pass a dedicated event loop to avoid
+    conflicts with asyncio.run() which cannot be nested or called when another
+    loop is already running.
+    """
+    if loop is not None:
+        return loop.run_until_complete(
+            tts_edge_async(text, voice, rate, output_path, volume=volume)
+        )
+    return asyncio.run(tts_edge_async(text, voice, rate, output_path, volume=volume))
 
 
-def tts_openai(text: str, voice: str, speed: float, output_path: str) -> str:
+def tts_openai(text: str, voice: str, speed: float, output_path: str,
+               volume: int = 100) -> str:
     """Generate speech using OpenAI gpt-4o-mini-tts (paid, best quality)."""
     try:
         from openai import OpenAI
@@ -265,25 +347,35 @@ def tts_openai(text: str, voice: str, speed: float, output_path: str) -> str:
     max_chars = 4000  # conservative limit (~2000 tokens)
     chunks = _chunk_text(text, max_chars)
 
-    temp_files = []
-    for i, chunk in enumerate(chunks):
-        chunk_path = output_path.replace(".mp3", f"_chunk{i}.mp3")
+    if len(chunks) == 1:
         response = client.audio.speech.create(
             model="gpt-4o-mini-tts",
             voice=voice,
-            input=chunk,
+            input=chunks[0],
             speed=speed,
             instructions="Read this text naturally and clearly. It is output from a coding assistant. Skip any formatting artifacts, read code-related terms clearly.",
         )
-        response.stream_to_file(chunk_path)
-        temp_files.append(chunk_path)
-
-    if len(temp_files) == 1:
-        os.rename(temp_files[0], output_path)
+        response.stream_to_file(output_path)
     else:
-        _concat_mp3(temp_files, output_path)
+        temp_files = []
+        for i, chunk in enumerate(chunks):
+            chunk_path = output_path.replace(".mp3", f"_chunk{i}.mp3")
+            response = client.audio.speech.create(
+                model="gpt-4o-mini-tts",
+                voice=voice,
+                input=chunk,
+                speed=speed,
+                instructions="Read this text naturally and clearly. It is output from a coding assistant. Skip any formatting artifacts, read code-related terms clearly.",
+            )
+            response.stream_to_file(chunk_path)
+            temp_files.append(chunk_path)
+
+        _concat_mp3(temp_files, output_path, volume=volume)
         for f in temp_files:
-            os.remove(f)
+            try:
+                os.remove(f)
+            except OSError:
+                pass
 
     return output_path
 
@@ -309,15 +401,24 @@ def _chunk_text(text: str, max_chars: int) -> list:
     return chunks if chunks else [text[:max_chars]]
 
 
-def _concat_mp3(files: list, output: str):
-    """Concatenate MP3 files using ffmpeg."""
+def _concat_mp3(files: list, output: str, volume: int = 100):
+    """Concatenate MP3 files using ffmpeg, or play sequentially as fallback."""
     ffmpeg = shutil.which("ffmpeg")
     if not ffmpeg:
-        # Fallback: just cat the files (works for MP3)
-        with open(output, "wb") as out:
-            for f in files:
-                with open(f, "rb") as inp:
-                    out.write(inp.read())
+        # Fallback: play segments sequentially instead of producing an invalid
+        # concatenated file.  Warn the user once.
+        print(
+            "WARNING: ffmpeg not found. Multi-chunk audio will be played sequentially. "
+            "Install ffmpeg for seamless concatenation.",
+            file=sys.stderr,
+        )
+        for f in files:
+            if _validate_audio_file(f):
+                play_audio(f, volume=volume)
+        # Write the last chunk as the "output" so callers that check the file
+        # still find something valid.
+        if files and _validate_audio_file(files[-1]):
+            shutil.copy2(files[-1], output)
         return
 
     list_file = output + ".list"
@@ -329,42 +430,169 @@ def _concat_mp3(files: list, output: str):
         [ffmpeg, "-y", "-f", "concat", "-safe", "0", "-i", list_file, "-c", "copy", output],
         capture_output=True,
     )
-    os.remove(list_file)
+    try:
+        os.remove(list_file)
+    except OSError:
+        pass
+
+
+# ─── Fallback TTS (offline) ──────────────────────────────────────────────────
+
+
+def tts_fallback(text: str, volume: int = 100) -> bool:
+    """Platform-native TTS fallback when edge-tts/openai are unavailable.
+
+    Returns True if speech was produced, False otherwise.
+    """
+    if sys.platform == "win32":
+        return _tts_fallback_windows(text, volume)
+    elif sys.platform == "darwin":
+        return _tts_fallback_macos(text, volume)
+    else:
+        return _tts_fallback_linux(text, volume)
+
+
+def _tts_fallback_windows(text: str, volume: int = 100) -> bool:
+    """Use PowerShell System.Speech.Synthesis on Windows."""
+    # Escape single quotes for PowerShell
+    escaped = text.replace("'", "''")
+    # Clamp volume to 0-100
+    vol = max(0, min(100, volume))
+    ps_script = (
+        f"Add-Type -AssemblyName System.Speech; "
+        f"$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
+        f"$s.Volume = {vol}; "
+        f"$s.Speak('{escaped}')"
+    )
+    try:
+        subprocess.run(
+            ["powershell", "-NoProfile", "-Command", ps_script],
+            capture_output=True,
+            timeout=120,
+        )
+        return True
+    except (subprocess.SubprocessError, FileNotFoundError):
+        return False
+
+
+def _tts_fallback_macos(text: str, volume: int = 100) -> bool:
+    """Use macOS 'say' command."""
+    if not shutil.which("say"):
+        return False
+    try:
+        subprocess.run(
+            ["say", text],
+            check=True,
+            capture_output=True,
+            timeout=120,
+        )
+        return True
+    except (subprocess.SubprocessError, FileNotFoundError):
+        return False
+
+
+def _tts_fallback_linux(text: str, volume: int = 100) -> bool:
+    """Use espeak or spd-say on Linux."""
+    # Try espeak first (more common)
+    if shutil.which("espeak"):
+        # espeak amplitude 0-200, default 100
+        amplitude = max(0, min(200, volume * 2))
+        try:
+            subprocess.run(
+                ["espeak", "-a", str(amplitude), text],
+                check=True,
+                capture_output=True,
+                timeout=120,
+            )
+            return True
+        except (subprocess.SubprocessError, FileNotFoundError):
+            pass
+
+    # Try spd-say
+    if shutil.which("spd-say"):
+        try:
+            subprocess.run(
+                ["spd-say", "-w", text],
+                check=True,
+                capture_output=True,
+                timeout=120,
+            )
+            return True
+        except (subprocess.SubprocessError, FileNotFoundError):
+            pass
+
+    return False
+
+
+# ─── Audio Validation ─────────────────────────────────────────────────────────
+
+
+def _validate_audio_file(path: str) -> bool:
+    """Verify an audio file exists and has non-zero size."""
+    try:
+        return os.path.isfile(path) and os.path.getsize(path) > 0
+    except OSError:
+        return False
 
 
 # ─── Audio Playback ───────────────────────────────────────────────────────────
 
+# Thread-safe counter for unique MCI aliases
+_mci_counter = 0
+_mci_counter_lock = threading.Lock()
 
-def _play_audio_mci(path: str):
+
+def _next_mci_alias() -> str:
+    """Return a unique MCI alias using a thread-safe counter."""
+    global _mci_counter
+    with _mci_counter_lock:
+        _mci_counter += 1
+        return f"snd{_mci_counter}"
+
+
+def _play_audio_mci(path: str, volume: int = 100):
     """Play MP3 using Windows MCI - completely windowless."""
     import ctypes
     winmm = ctypes.windll.winmm
     buf = ctypes.create_unicode_buffer(256)
 
-    # Use a unique alias to avoid conflicts
-    alias = f"snd{id(path) % 99999}"
+    # Use a thread-safe unique alias to avoid collisions
+    alias = _next_mci_alias()
     abs_path = os.path.abspath(path)
 
-    # Open, play (blocking), close
+    # Open, set volume, play (blocking), close
     err = winmm.mciSendStringW(f'open "{abs_path}" type mpegvideo alias {alias}', buf, 256, 0)
     if err != 0:
         return False
+
+    # Set volume (MCI volume is 0-1000)
+    mci_vol = max(0, min(1000, int(volume * 10)))
+    winmm.mciSendStringW(f'setaudio {alias} volume to {mci_vol}', buf, 256, 0)
+
     winmm.mciSendStringW(f'play {alias} wait', buf, 256, 0)
     winmm.mciSendStringW(f'close {alias}', buf, 256, 0)
     return True
 
 
-def play_audio(path: str, blocking: bool = True):
+def play_audio(path: str, blocking: bool = True, volume: int = 100):
     """Play audio file without opening any visible window."""
+    # Validate the audio file before attempting playback
+    if not _validate_audio_file(path):
+        print(f"WARNING: Audio file missing or empty: {path}", file=sys.stderr)
+        return False
+
     # On Windows, use MCI (zero windows, built-in MP3 support)
     if os.name == 'nt' and blocking:
-        if _play_audio_mci(path):
+        if _play_audio_mci(path, volume=volume):
             return True
 
     # Unix/macOS fallback or non-blocking
+    # ffplay supports -volume (0-100)
+    ffplay_vol = max(0, min(100, volume))
     players = [
-        ("ffplay", ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", path]),
-        ("afplay", ["afplay", path]),  # macOS
+        ("ffplay", ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet",
+                     "-volume", str(ffplay_vol), path]),
+        ("afplay", ["afplay", "-v", str(volume / 100.0), path]),  # macOS: -v is 0.0-1.0
     ]
 
     for name, cmd in players:
@@ -389,15 +617,18 @@ def play_audio(path: str, blocking: bool = True):
 class SpeechQueue:
     """Queue-based speech system for real-time output."""
 
-    def __init__(self, backend: str, voice: str, rate: str, speed: float, skip_code: bool, skip_paths: bool):
+    def __init__(self, backend: str, voice: str, rate: str, speed: float,
+                 skip_code: bool, skip_paths: bool, volume: int = 100):
         self.backend = backend
         self.voice = voice
         self.rate = rate
         self.speed = speed
         self.skip_code = skip_code
         self.skip_paths = skip_paths
+        self.volume = volume
         self.queue = queue.Queue()
         self.running = True
+        self._loop = None  # Dedicated event loop for worker thread
         self.worker = threading.Thread(target=self._worker, daemon=True)
         self.worker.start()
         self.temp_dir = tempfile.mkdtemp(prefix="cc_speak_")
@@ -405,15 +636,25 @@ class SpeechQueue:
 
     def _worker(self):
         """Background worker that processes speech queue."""
-        while self.running or not self.queue.empty():
-            try:
-                text = self.queue.get(timeout=0.5)
-                if text is None:  # Poison pill
-                    break
-                self._speak(text)
-                self.queue.task_done()
-            except queue.Empty:
-                continue
+        # Create a dedicated event loop for this thread so that
+        # asyncio.run() / loop.run_until_complete() never conflicts
+        # with the main thread's event loop.
+        self._loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self._loop)
+
+        try:
+            while self.running or not self.queue.empty():
+                try:
+                    text = self.queue.get(timeout=0.5)
+                    if text is None:  # Poison pill
+                        break
+                    self._speak(text)
+                    self.queue.task_done()
+                except queue.Empty:
+                    continue
+        finally:
+            self._loop.close()
+            self._loop = None
 
     def _speak(self, text: str):
         """Generate and play speech for text."""
@@ -429,16 +670,31 @@ class SpeechQueue:
         output_path = os.path.join(self.temp_dir, f"speech_{self.file_counter}.mp3")
 
         try:
+            result = None
             if self.backend == "edge":
-                result = tts_edge(cleaned, self.voice, self.rate, output_path)
+                result = tts_edge(cleaned, self.voice, self.rate, output_path,
+                                  volume=self.volume, loop=self._loop)
             else:
-                result = tts_openai(cleaned, self.voice, self.speed, output_path)
+                result = tts_openai(cleaned, self.voice, self.speed, output_path,
+                                    volume=self.volume)
 
-            if result and os.path.exists(output_path):
-                play_audio(output_path)
-                os.remove(output_path)
+            if result and _validate_audio_file(output_path):
+                play_audio(output_path, volume=self.volume)
+                try:
+                    os.remove(output_path)
+                except OSError:
+                    pass
+            elif result is None:
+                # Primary TTS failed — try platform fallback
+                print("INFO: Primary TTS failed, trying platform fallback...", file=sys.stderr)
+                tts_fallback(cleaned, volume=self.volume)
         except Exception as e:
             print(f"Speech error: {e}", file=sys.stderr)
+            # Last resort: platform fallback
+            try:
+                tts_fallback(cleaned, volume=self.volume)
+            except Exception:
+                pass
 
     def enqueue(self, text: str):
         """Add text to speech queue."""
@@ -451,9 +707,9 @@ class SpeechQueue:
         self.worker.join(timeout=5)
         # Cleanup temp dir
         try:
-            import shutil
-            shutil.rmtree(self.temp_dir, ignore_errors=True)
-        except:
+            import shutil as _shutil
+            _shutil.rmtree(self.temp_dir, ignore_errors=True)
+        except Exception:
             pass
 
 
@@ -678,6 +934,13 @@ def main():
         help="Speed multiplier for OpenAI (0.25-4.0, default 1.0)",
     )
     parser.add_argument(
+        "--volume", "-V",
+        type=int,
+        default=int(os.environ.get("CLAUDE_SPEAK_VOLUME",
+                    os.environ.get("CC_SPEAK_VOLUME", "100"))),
+        help="Volume level 0-100 (default: 100). Env: CLAUDE_SPEAK_VOLUME or CC_SPEAK_VOLUME",
+    )
+    parser.add_argument(
         "--output", "-o",
         default=None,
         help="Save audio to file instead of playing",
@@ -693,6 +956,11 @@ def main():
         help="Don't strip file paths from output",
     )
     parser.add_argument(
+        "--keep-tool-output",
+        action="store_true",
+        help="Don't filter out tool call outputs, JSON blocks, and command outputs",
+    )
+    parser.add_argument(
         "--raw",
         action="store_true",
         help="Skip all text cleaning (read raw input)",
@@ -704,6 +972,9 @@ def main():
     )
 
     args = parser.parse_args()
+
+    # Clamp volume to valid range
+    args.volume = max(0, min(100, args.volume))
 
     # Set default voice per backend
     if args.voice is None:
@@ -721,6 +992,7 @@ def main():
             speed=args.speed,
             skip_code=not args.keep_code,
             skip_paths=not args.keep_paths,
+            volume=args.volume,
         )
 
         try:
@@ -757,7 +1029,12 @@ def main():
     if args.raw:
         text = raw_text
     else:
-        text = clean_text(raw_text, skip_code=not args.keep_code, skip_paths=not args.keep_paths)
+        text = clean_text(
+            raw_text,
+            skip_code=not args.keep_code,
+            skip_paths=not args.keep_paths,
+            filter_tool_output=not args.keep_tool_output,
+        )
 
     if not text.strip():
         print("WARNING: After cleaning, no readable text remains.", file=sys.stderr)
@@ -765,26 +1042,54 @@ def main():
 
     # Preview mode
     if args.preview:
-        print("─── Cleaned text ───", file=sys.stderr)
+        print("--- Cleaned text ---", file=sys.stderr)
         print(text, file=sys.stderr)
-        print(f"─── {len(text)} chars, ~{len(text.split())} words ───", file=sys.stderr)
+        print(f"--- {len(text)} chars, ~{len(text.split())} words ---", file=sys.stderr)
         sys.exit(0)
 
     # Generate audio
     output_path = args.output or os.path.join(tempfile.gettempdir(), "cc_speak_output.mp3")
 
-    print(f"Generating speech ({args.backend}, voice: {args.voice})...", file=sys.stderr)
+    print(f"Generating speech ({args.backend}, voice: {args.voice}, volume: {args.volume}%)...", file=sys.stderr)
 
+    tts_succeeded = False
     if args.backend == "edge":
-        asyncio.run(tts_edge_async(text, args.voice, args.rate, output_path))
+        result = asyncio.run(tts_edge_async(text, args.voice, args.rate, output_path,
+                                            volume=args.volume))
+        tts_succeeded = result is not None
     else:
-        tts_openai(text, args.voice, args.speed, output_path)
+        try:
+            tts_openai(text, args.voice, args.speed, output_path, volume=args.volume)
+            tts_succeeded = True
+        except Exception as e:
+            print(f"ERROR: OpenAI TTS failed: {e}", file=sys.stderr)
+            tts_succeeded = False
+
+    # If primary TTS failed, try platform fallback
+    if not tts_succeeded:
+        print("INFO: Trying platform-native TTS fallback...", file=sys.stderr)
+        if tts_fallback(text, volume=args.volume):
+            return  # Fallback spoke the text directly, no file to play
+        else:
+            print("ERROR: All TTS backends failed.", file=sys.stderr)
+            sys.exit(1)
+
+    # Validate the generated audio file
+    if not _validate_audio_file(output_path):
+        print("ERROR: Generated audio file is missing or empty.", file=sys.stderr)
+        # Try fallback
+        print("INFO: Trying platform-native TTS fallback...", file=sys.stderr)
+        if tts_fallback(text, volume=args.volume):
+            return
+        else:
+            print("ERROR: All TTS backends failed.", file=sys.stderr)
+            sys.exit(1)
 
     # Play or save
     if args.output:
         print(f"Audio saved to: {args.output}", file=sys.stderr)
     else:
-        play_audio(output_path)
+        play_audio(output_path, volume=args.volume)
         # Clean up temp file
         try:
             os.remove(output_path)

@@ -22,6 +22,13 @@ import tempfile
 import shutil
 import signal
 import atexit
+import hashlib
+import base64
+import collections
+import logging
+
+logger = logging.getLogger("claude-speak")
+logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s", stream=sys.stderr)
 
 # Import cc-speak's TTS functionality
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -50,10 +57,23 @@ def _normalize_path(path):
 def encode_cwd_to_dirname(cwd):
     """Encode a working directory path to Claude's project directory name.
 
-    Example: C:\\Projects\\MyApp -> C--Projects-MyApp
+    Uses URL-safe base64 encoding for a fully reversible, unambiguous mapping.
+    Example: C:\\Projects\\MyApp -> Qzpc... (base64)
     """
     path = os.path.normpath(cwd)
-    return path.replace(":", "-").replace("\\", "-").replace("/", "-")
+    encoded = base64.urlsafe_b64encode(path.encode("utf-8")).decode("ascii")
+    # Strip padding '=' which is safe since we can re-add on decode
+    return encoded.rstrip("=")
+
+
+def decode_dirname_to_cwd(dirname):
+    """Decode a base64-encoded directory name back to the original CWD path.
+
+    Inverse of encode_cwd_to_dirname().
+    """
+    # Re-add padding
+    padded = dirname + "=" * (-len(dirname) % 4)
+    return base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8")
 
 
 def is_speech_paused(cwd=None):
@@ -158,7 +178,14 @@ def extract_text_from_line(line):
             if text.strip():
                 texts.append(text)
 
-    return (" ".join(texts) if texts else None), message_id
+    combined = " ".join(texts) if texts else None
+
+    # If no message_id available, derive one from the text content hash
+    if combined and message_id is None:
+        message_id = "_hash_" + hashlib.sha256(combined.encode("utf-8")).hexdigest()[:16]
+        logger.warning("No message.id or uuid found; using text hash for deduplication: %s", message_id)
+
+    return combined, message_id
 
 
 # ─── PID File Lock ────────────────────────────────────────────────────────────
@@ -191,28 +218,46 @@ def _is_process_running(pid):
 
 
 def acquire_pid_lock(cwd):
-    """Acquire PID file lock. Returns True if acquired, False if another monitor is running."""
+    """Acquire PID file lock atomically. Returns True if acquired, False if another monitor is running.
+
+    Uses open(..., 'x') for atomic exclusive creation to eliminate TOCTOU race conditions.
+    """
     pid_file = _get_pid_file_path(cwd)
+    our_pid = str(os.getpid())
 
-    # Check for existing monitor
-    if os.path.exists(pid_file):
-        try:
-            with open(pid_file, "r") as f:
-                old_pid = int(f.read().strip())
-            if _is_process_running(old_pid) and old_pid != os.getpid():
-                return False  # Another monitor is already running
-        except (ValueError, OSError):
-            pass  # Stale/corrupt PID file, overwrite it
+    os.makedirs(os.path.dirname(pid_file), exist_ok=True)
 
-    # Write our PID
+    # Attempt atomic exclusive creation first
     try:
-        os.makedirs(os.path.dirname(pid_file), exist_ok=True)
-        with open(pid_file, "w") as f:
-            f.write(str(os.getpid()))
-    except OSError:
-        pass  # Non-fatal
+        fd = os.open(pid_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+        os.write(fd, our_pid.encode())
+        os.close(fd)
+        return True
+    except (FileExistsError, PermissionError, OSError):
+        pass  # File already exists — check if the owner is still alive
 
-    return True
+    # PID file exists — read it and check if the process is still running
+    try:
+        with open(pid_file, "r") as f:
+            old_pid = int(f.read().strip())
+        if _is_process_running(old_pid) and old_pid != os.getpid():
+            return False  # Another monitor is genuinely running
+    except (ValueError, OSError):
+        pass  # Stale/corrupt PID file — safe to reclaim
+
+    # Stale lock — remove and retry atomically
+    try:
+        os.remove(pid_file)
+    except OSError:
+        pass
+    try:
+        fd = os.open(pid_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+        os.write(fd, our_pid.encode())
+        os.close(fd)
+        return True
+    except (FileExistsError, PermissionError, OSError):
+        # Another process beat us in the race — they win
+        return False
 
 
 def release_pid_lock(cwd):
@@ -237,7 +282,9 @@ class SpeechMonitor:
         self.debounce_ms = debounce_ms
         self.speech_queue = queue.Queue()
         self.running = True
-        self.spoken_message_ids = set()
+        # Bounded LRU dedup: OrderedDict keeps insertion order; evict oldest half at 2000
+        self._spoken_ids_max = 2000
+        self.spoken_message_ids = collections.OrderedDict()
         self.temp_dir = tempfile.mkdtemp(prefix="claude_speak_")
         self.file_counter = 0
 
@@ -259,6 +306,9 @@ class SpeechMonitor:
         self.last_text_time = 0
         self.pending_lock = threading.Lock()
 
+        # Register atexit handler to clean temp dir even on unhandled crash
+        atexit.register(self._cleanup_temp_dir)
+
         # Start speech worker
         self.speech_thread = threading.Thread(target=self._speech_worker, daemon=True)
         self.speech_thread.start()
@@ -266,6 +316,14 @@ class SpeechMonitor:
         # Start debounce flusher
         self.debounce_thread = threading.Thread(target=self._debounce_flusher, daemon=True)
         self.debounce_thread.start()
+
+    def _cleanup_temp_dir(self):
+        """Remove temp directory. Safe to call multiple times."""
+        try:
+            if os.path.isdir(self.temp_dir):
+                shutil.rmtree(self.temp_dir, ignore_errors=True)
+        except Exception:
+            pass
 
     def _is_paused(self):
         """Check if speech is paused, using active project config in global mode."""
@@ -337,7 +395,7 @@ class SpeechMonitor:
                         cc_speak.play_audio(output_path)
                         os.remove(output_path)
                 except Exception:
-                    pass  # Silent - we're a background process
+                    logger.error("Speech worker error", exc_info=True)
 
                 self.speech_queue.task_done()
             except queue.Empty:
@@ -358,12 +416,24 @@ class SpeechMonitor:
                         for chunk in chunks:
                             self.speech_queue.put(chunk)
 
+    def _record_spoken_id(self, message_id):
+        """Record a message_id in the bounded LRU dedup set.
+
+        Evicts the oldest half when the set exceeds _spoken_ids_max entries.
+        """
+        self.spoken_message_ids[message_id] = True
+        if len(self.spoken_message_ids) > self._spoken_ids_max:
+            # Evict oldest half
+            to_remove = self._spoken_ids_max // 2
+            for _ in range(to_remove):
+                self.spoken_message_ids.popitem(last=False)
+
     def add_text(self, text, message_id=None):
         """Add text to be spoken (with deduplication by message.id)."""
         if message_id:
             if message_id in self.spoken_message_ids:
                 return
-            self.spoken_message_ids.add(message_id)
+            self._record_spoken_id(message_id)
 
         with self.pending_lock:
             self.pending_text += " " + text
@@ -383,11 +453,28 @@ class SpeechMonitor:
         # Global mode: find across all projects
         return find_active_jsonl_global()
 
+    @staticmethod
+    def _get_file_identity(filepath):
+        """Get a file identity marker to detect replacement vs truncation.
+
+        On Unix, uses inode number. On Windows, uses mtime as a proxy since
+        inodes are not reliably available.
+        """
+        try:
+            st = os.stat(filepath)
+            if os.name == 'nt':
+                return st.st_mtime
+            else:
+                return st.st_ino
+        except OSError:
+            return None
+
     def watch(self):
         """Main watch loop - monitor JSONL files for new content."""
         current_file = None
         current_file_norm = None  # Normalized path for comparison
         file_pos = 0
+        file_identity = None  # inode (Unix) or mtime (Windows) to detect file replacement
         last_rescan_time = 0
         rescan_interval = 5
 
@@ -407,10 +494,12 @@ class SpeechMonitor:
                     self.active_config_dir = os.path.dirname(latest)
                     try:
                         file_pos = os.path.getsize(current_file)
+                        file_identity = self._get_file_identity(current_file)
                     except OSError:
                         # Can't access new file yet — skip it, retry next cycle
                         current_file = None
                         current_file_norm = None
+                        file_identity = None
                     time.sleep(0.5)
                     continue
 
@@ -418,9 +507,26 @@ class SpeechMonitor:
                 time.sleep(1)
                 continue
 
+            # Fix 6: If current file no longer exists, force immediate rescan
+            if not os.path.exists(current_file):
+                logger.warning("Tracked JSONL file no longer exists, forcing rescan: %s", current_file)
+                current_file = None
+                current_file_norm = None
+                file_identity = None
+                last_rescan_time = 0  # Force immediate rescan
+                continue
+
             # Check for new content (fast - just stat + read)
             try:
                 current_size = os.path.getsize(current_file)
+
+                # Fix 5: Detect file replacement (different inode/mtime means new file at same path)
+                new_identity = self._get_file_identity(current_file)
+                if file_identity is not None and new_identity != file_identity:
+                    logger.info("File replaced (identity changed), re-reading from start: %s", current_file)
+                    file_pos = 0
+                    file_identity = new_identity
+
                 if current_size > file_pos:
                     with open(current_file, "r", encoding="utf-8") as f:
                         f.seek(file_pos)
@@ -458,10 +564,7 @@ class SpeechMonitor:
         self.speech_queue.put(None)
         self.speech_thread.join(timeout=15)
 
-        try:
-            shutil.rmtree(self.temp_dir, ignore_errors=True)
-        except Exception:
-            pass
+        self._cleanup_temp_dir()
 
 
 def main():

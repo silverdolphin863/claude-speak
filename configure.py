@@ -12,10 +12,12 @@ Usage:
 """
 
 import asyncio
+import base64
 import hashlib
 import http.server
 import json
 import os
+import secrets
 import shutil
 import signal
 import socketserver
@@ -23,9 +25,10 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import webbrowser
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 # Import cc-speak's TTS functionality
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -48,7 +51,27 @@ def encode_cwd_to_dirname(cwd):
 
 
 def decode_dirname(dirname):
-    """Best-effort decode of dirname back to a readable path."""
+    """Best-effort decode of dirname back to a readable path.
+
+    Supports two encoding formats:
+      1. Legacy dash-separated: C--Projects-MyApp (from replace-based encoding)
+      2. Base64 URL-safe: encoded with base64.urlsafe_b64encode (if claude-speak.py switches)
+    """
+    # Try base64 decoding first — base64url uses [A-Za-z0-9_-] and optional '=' padding.
+    # Legacy dirnames always contain '--' (from drive letter colon) on Windows or start
+    # with a dash on Unix, so a valid base64 dirname is distinguishable.
+    if not dirname.startswith('-') and '--' not in dirname:
+        try:
+            # Add padding if needed (base64 requires length divisible by 4)
+            padded = dirname + '=' * (-len(dirname) % 4)
+            decoded = base64.urlsafe_b64decode(padded).decode('utf-8')
+            # Sanity check: decoded path should look like an absolute path
+            if decoded.startswith('/') or (len(decoded) >= 3 and decoded[1] == ':'):
+                return decoded
+        except (ValueError, UnicodeDecodeError):
+            pass  # Not base64, fall through to legacy decoding
+
+    # Legacy dash-separated decoding
     if os.name == 'nt':
         parts = dirname.split('-')
         # Find drive letter pattern: single letter followed by empty string (from ::)
@@ -80,6 +103,26 @@ def is_process_running(pid):
 class ConfigHandler(http.server.BaseHTTPRequestHandler):
     """HTTP request handler for the settings UI and API."""
 
+    # CSRF token shared across all handler instances (set by the server)
+    csrf_token = None
+
+    def _check_origin(self):
+        """Validate Origin header on POST requests to prevent CSRF attacks.
+
+        Accepts requests from localhost origins (any port) or requests with
+        no Origin header (same-origin requests from older browsers).
+        Returns True if the request is allowed, False otherwise.
+        """
+        origin = self.headers.get('Origin')
+        if origin is None:
+            # No Origin header — same-origin request (e.g., from same page fetch)
+            return True
+        parsed_origin = urlparse(origin)
+        # Allow localhost variants only
+        if parsed_origin.hostname in ('localhost', '127.0.0.1', '::1'):
+            return True
+        return False
+
     def do_GET(self):
         parsed = urlparse(self.path)
 
@@ -95,12 +138,25 @@ class ConfigHandler(http.server.BaseHTTPRequestHandler):
             self._api_get_settings(project)
         elif parsed.path == '/api/status':
             self._api_get_status()
+        elif parsed.path == '/api/csrf-token':
+            self._api_csrf_token()
         elif parsed.path.startswith('/audio/'):
             self._serve_audio(parsed.path)
         else:
             self.send_error(404)
 
     def do_POST(self):
+        # CSRF protection: validate Origin header
+        if not self._check_origin():
+            self._json_response({'error': 'Forbidden: invalid Origin header'}, 403)
+            return
+
+        # CSRF protection: validate token (if client sends one)
+        csrf_header = self.headers.get('X-CSRF-Token')
+        if csrf_header is not None and csrf_header != self.csrf_token:
+            self._json_response({'error': 'Forbidden: invalid CSRF token'}, 403)
+            return
+
         parsed = urlparse(self.path)
         content_length = int(self.headers.get('Content-Length', 0))
         body = self.rfile.read(content_length) if content_length else b'{}'
@@ -127,7 +183,7 @@ class ConfigHandler(http.server.BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header('Access-Control-Allow-Origin', '*')
         self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
-        self.send_header('Access-Control-Allow-Headers', 'Content-Type')
+        self.send_header('Access-Control-Allow-Headers', 'Content-Type, X-CSRF-Token')
         self.end_headers()
 
     # ─── Page Serving ────────────────────────────────────────────────────────
@@ -148,13 +204,20 @@ class ConfigHandler(http.server.BaseHTTPRequestHandler):
 
     def _serve_audio(self, path):
         """Serve a generated audio preview file."""
-        filename = path.split('/')[-1]
-        # Sanitize filename to prevent directory traversal
-        if '/' in filename or '\\' in filename or '..' in filename:
+        # Decode URL-encoded characters FIRST to prevent %2f/%5c bypass
+        filename = unquote(path.split('/')[-1])
+        # Strip any directory components regardless of encoding tricks
+        filename = os.path.basename(filename)
+        # Reject directory traversal patterns and empty filenames
+        if not filename or '..' in filename:
+            self.send_error(403)
+            return
+        # Verify the resolved path is within PREVIEW_DIR
+        audio_path = os.path.realpath(os.path.join(PREVIEW_DIR, filename))
+        if not audio_path.startswith(os.path.realpath(PREVIEW_DIR) + os.sep):
             self.send_error(403)
             return
 
-        audio_path = os.path.join(PREVIEW_DIR, filename)
         if os.path.exists(audio_path):
             with open(audio_path, 'rb') as f:
                 content = f.read()
@@ -168,6 +231,10 @@ class ConfigHandler(http.server.BaseHTTPRequestHandler):
             self.send_error(404)
 
     # ─── API Endpoints ───────────────────────────────────────────────────────
+
+    def _api_csrf_token(self):
+        """GET /api/csrf-token - Return the current CSRF token for POST requests."""
+        self._json_response({'token': self.csrf_token})
 
     def _api_list_voices(self):
         """GET /api/voices - List all available edge-tts voices."""
@@ -272,9 +339,27 @@ class ConfigHandler(http.server.BaseHTTPRequestHandler):
 
     def _api_save_settings(self, data):
         """POST /api/settings - Save settings for a project."""
+        # Validate POST data types
+        if not isinstance(data, dict):
+            self._json_response({'error': 'Request body must be a JSON object'}, 400)
+            return
+
         project_path = data.get('project')
         voice = data.get('voice')
         paused = data.get('paused')
+
+        # Type validation: project must be a string (or absent/null for global)
+        if project_path is not None and not isinstance(project_path, str):
+            self._json_response({'error': "'project' must be a string"}, 400)
+            return
+        # Type validation: voice must be a string (or absent/null)
+        if voice is not None and not isinstance(voice, str):
+            self._json_response({'error': "'voice' must be a string"}, 400)
+            return
+        # Type validation: paused must be a boolean (or absent/null)
+        if paused is not None and not isinstance(paused, bool):
+            self._json_response({'error': "'paused' must be a boolean"}, 400)
+            return
 
         if project_path:
             dirname = encode_cwd_to_dirname(project_path)
@@ -332,7 +417,11 @@ class ConfigHandler(http.server.BaseHTTPRequestHandler):
         self._json_response({'url': f'/audio/{filename}'})
 
     def _api_get_status(self):
-        """GET /api/status - Check running speech monitors."""
+        """GET /api/status - Check running speech monitors.
+
+        Verifies each PID is actually running and cleans up stale PID files
+        where the process has exited.
+        """
         monitors = []
 
         # Check global monitor PID
@@ -341,11 +430,18 @@ class ConfigHandler(http.server.BaseHTTPRequestHandler):
             try:
                 with open(global_pid_file, 'r') as f:
                     pid = int(f.read().strip())
+                running = is_process_running(pid)
+                # Clean up stale PID file if process is no longer running
+                if not running:
+                    try:
+                        os.remove(global_pid_file)
+                    except OSError:
+                        pass
                 monitors.append({
                     'project': None,
                     'name': 'Global (all projects)',
                     'pid': pid,
-                    'running': is_process_running(pid),
+                    'running': running,
                     'mode': 'global',
                 })
             except (ValueError, OSError):
@@ -359,11 +455,18 @@ class ConfigHandler(http.server.BaseHTTPRequestHandler):
                     try:
                         with open(pid_file, 'r') as f:
                             pid = int(f.read().strip())
+                        running = is_process_running(pid)
+                        # Clean up stale PID file if process is no longer running
+                        if not running:
+                            try:
+                                os.remove(pid_file)
+                            except OSError:
+                                pass
                         monitors.append({
                             'project': decode_dirname(dirname),
                             'name': os.path.basename(decode_dirname(dirname).rstrip('/\\')),
                             'pid': pid,
-                            'running': is_process_running(pid),
+                            'running': running,
                             'mode': 'project',
                         })
                     except (ValueError, OSError):
@@ -495,13 +598,46 @@ class ThreadedTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
     daemon_threads = True
 
 
-def cleanup_previews():
-    """Clean up old preview audio files."""
-    if os.path.exists(PREVIEW_DIR):
+def cleanup_previews(max_age_seconds=None):
+    """Clean up preview audio files.
+
+    Args:
+        max_age_seconds: If provided, only delete files older than this many seconds.
+                         If None, delete all preview files (used on startup/shutdown).
+    """
+    if not os.path.exists(PREVIEW_DIR):
+        return
+    if max_age_seconds is None:
+        # Full cleanup — remove entire directory
         try:
             shutil.rmtree(PREVIEW_DIR, ignore_errors=True)
         except Exception:
             pass
+    else:
+        # Selective cleanup — only remove files older than max_age_seconds
+        now = time.time()
+        try:
+            for filename in os.listdir(PREVIEW_DIR):
+                filepath = os.path.join(PREVIEW_DIR, filename)
+                try:
+                    if os.path.isfile(filepath) and (now - os.path.getmtime(filepath)) > max_age_seconds:
+                        os.remove(filepath)
+                except OSError:
+                    pass
+        except OSError:
+            pass
+
+
+def _periodic_preview_cleanup(stop_event, interval_seconds=600, max_age_seconds=3600):
+    """Background thread that periodically cleans up stale preview files.
+
+    Args:
+        stop_event: threading.Event to signal the thread to stop.
+        interval_seconds: How often to run cleanup (default: 600 = 10 minutes).
+        max_age_seconds: Delete files older than this (default: 3600 = 1 hour).
+    """
+    while not stop_event.wait(timeout=interval_seconds):
+        cleanup_previews(max_age_seconds=max_age_seconds)
 
 
 def main():
@@ -514,6 +650,10 @@ def main():
     # Clean up old previews on start
     cleanup_previews()
 
+    # Generate CSRF token for this server session
+    csrf_token = secrets.token_hex(32)
+    ConfigHandler.csrf_token = csrf_token
+
     try:
         server = ThreadedTCPServer(("127.0.0.1", args.port), ConfigHandler)
     except OSError as e:
@@ -521,6 +661,16 @@ def main():
             print(f"Port {args.port} is already in use. Try: python configure.py --port {args.port + 1}")
             sys.exit(1)
         raise
+
+    # Start background thread for periodic preview cleanup (every 10 min, files > 1 hour)
+    cleanup_stop = threading.Event()
+    cleanup_thread = threading.Thread(
+        target=_periodic_preview_cleanup,
+        args=(cleanup_stop,),
+        daemon=True,
+        name='preview-cleanup',
+    )
+    cleanup_thread.start()
 
     url = f"http://localhost:{args.port}"
     print(f"claude-speak settings: {url}")
@@ -534,6 +684,7 @@ def main():
     except KeyboardInterrupt:
         print("\nStopping...")
     finally:
+        cleanup_stop.set()
         server.shutdown()
         cleanup_previews()
 

@@ -34,8 +34,15 @@ $ErrorActionPreference = "Stop"
 $ToolsDir = "$env:USERPROFILE\.claude\tools"
 $ClaudeSpeak = "$ToolsDir\claude-speak.py"
 
+# Validate claude-speak.py exists
 if (-not (Test-Path $ClaudeSpeak)) {
-    Write-Error "claude-speak.py not found at $ClaudeSpeak"
+    Write-Error "claude-speak.py not found at $ClaudeSpeak. Run install.ps1 first."
+    exit 1
+}
+
+# Validate Claude Code is installed
+if (-not (Get-Command claude -ErrorAction SilentlyContinue)) {
+    Write-Error "Claude Code CLI not found. Install it from https://docs.anthropic.com/claude-code"
     exit 1
 }
 
@@ -50,11 +57,22 @@ Write-Host "Starting Claude Code with speech..." -ForegroundColor Cyan
 Write-Host "Voice: $Voice | Rate: $Rate | Debounce: ${Debounce}ms" -ForegroundColor DarkGray
 Write-Host ""
 
-# Kill any existing speech monitors (prevents duplicates)
+# Normalize project path for matching against --cwd in command lines
+$normalizedProject = $ProjectPath.TrimEnd('\', '/').ToLower()
+
+# Kill existing speech monitors for THIS project only (prevents duplicates)
 Get-CimInstance Win32_Process -Filter "Name='python.exe'" -ErrorAction SilentlyContinue |
-    Where-Object { $_.CommandLine -like "*claude-speak*" } |
+    Where-Object { $_.CommandLine -like "*claude-speak*" -and $_.CommandLine -like "*$normalizedProject*" } |
     ForEach-Object {
-        Write-Host "Killing existing speech monitor (PID: $($_.ProcessId))" -ForegroundColor DarkYellow
+        Write-Host "Killing existing speech monitor for this project (PID: $($_.ProcessId))" -ForegroundColor DarkYellow
+        Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+    }
+
+# Also check python3.exe on systems where it's named differently
+Get-CimInstance Win32_Process -Filter "Name='python3.exe'" -ErrorAction SilentlyContinue |
+    Where-Object { $_.CommandLine -like "*claude-speak*" -and $_.CommandLine -like "*$normalizedProject*" } |
+    ForEach-Object {
+        Write-Host "Killing existing speech monitor for this project (PID: $($_.ProcessId))" -ForegroundColor DarkYellow
         Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
     }
 
@@ -70,6 +88,9 @@ $speechProcess = Start-Process -FilePath "python" -ArgumentList @(
 
 Write-Host "Speech monitor started (PID: $($speechProcess.Id))" -ForegroundColor DarkGray
 Write-Host ""
+
+# Brief delay to let the monitor initialize before Claude starts
+Start-Sleep -Milliseconds 500
 
 try {
     # Run Claude interactively in foreground (full TTY, no piping)

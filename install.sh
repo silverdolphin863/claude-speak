@@ -19,20 +19,63 @@ CLAUDE_DIR="$HOME/.claude"
 TOOLS_DIR="$CLAUDE_DIR/tools"
 SKILL_DIR="$CLAUDE_DIR/skills/speak"
 
-# 1. Install edge-tts
-echo "[1/3] Installing edge-tts..."
-if command -v pip3 &>/dev/null; then
-    pip3 install edge-tts --quiet 2>/dev/null
-    echo "  OK - edge-tts installed"
-elif command -v pip &>/dev/null; then
-    pip install edge-tts --quiet 2>/dev/null
-    echo "  OK - edge-tts installed"
+# ── Pre-flight checks ──────────────────────────────────────────────
+
+# Check Python 3 is available
+if command -v python3 &>/dev/null; then
+    PYTHON_CMD="python3"
+elif command -v python &>/dev/null && python --version 2>&1 | grep -q "Python 3"; then
+    PYTHON_CMD="python"
 else
-    echo "  ERROR - pip not found. Install Python 3 first."
+    echo "  ERROR: Python 3 is required but not found."
+    echo "  Install Python 3.8+ from https://www.python.org/downloads/"
     exit 1
 fi
 
-# 2. Copy scripts to ~/.claude/tools/
+# Check Python version >= 3.8
+PYTHON_VERSION=$($PYTHON_CMD -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+PYTHON_MAJOR=$($PYTHON_CMD -c 'import sys; print(sys.version_info.major)')
+PYTHON_MINOR=$($PYTHON_CMD -c 'import sys; print(sys.version_info.minor)')
+
+if [ "$PYTHON_MAJOR" -lt 3 ] || { [ "$PYTHON_MAJOR" -eq 3 ] && [ "$PYTHON_MINOR" -lt 8 ]; }; then
+    echo "  ERROR: Python 3.8+ is required (found $PYTHON_VERSION)."
+    echo "  Please upgrade Python: https://www.python.org/downloads/"
+    exit 1
+fi
+
+echo "  Python $PYTHON_VERSION detected ($PYTHON_CMD)"
+
+# Warn if tools directory already exists
+if [ -d "$TOOLS_DIR" ] && ls "$TOOLS_DIR"/claude-speak.py &>/dev/null 2>&1; then
+    echo ""
+    echo "  NOTE: Existing installation found in $TOOLS_DIR"
+    echo "  Files will be overwritten."
+    echo ""
+fi
+
+# ── Step 1: Install edge-tts ───────────────────────────────────────
+
+echo "[1/3] Installing edge-tts..."
+if command -v pip3 &>/dev/null; then
+    pip3 install edge-tts --quiet || { echo "  ERROR: Failed to install edge-tts via pip3"; exit 1; }
+elif command -v pip &>/dev/null; then
+    pip install edge-tts --quiet || { echo "  ERROR: Failed to install edge-tts via pip"; exit 1; }
+else
+    echo "  ERROR: pip not found. Install Python 3 first."
+    exit 1
+fi
+
+# Verify edge-tts is importable
+if ! $PYTHON_CMD -c "import edge_tts" 2>/dev/null; then
+    echo "  ERROR: edge-tts installed but cannot be imported."
+    echo "  Try: $PYTHON_CMD -m pip install edge-tts"
+    exit 1
+fi
+
+echo "  OK - edge-tts installed"
+
+# ── Step 2: Copy scripts ───────────────────────────────────────────
+
 echo "[2/3] Copying scripts to $TOOLS_DIR..."
 mkdir -p "$TOOLS_DIR"
 
@@ -46,7 +89,8 @@ for script in claude-speak.py cc-speak.py configure.py settings.html; do
     fi
 done
 
-# 3. Install /speak skill
+# ── Step 3: Install /speak skill ───────────────────────────────────
+
 echo "[3/3] Installing /speak skill..."
 mkdir -p "$SKILL_DIR"
 
@@ -72,10 +116,10 @@ echo "  Installation complete!"
 echo ""
 echo "  Quick start:"
 echo "    # Start the speech monitor (all projects):"
-echo "    python3 $TOOLS_DIR/claude-speak.py"
+echo "    $PYTHON_CMD $TOOLS_DIR/claude-speak.py"
 echo ""
 echo "    # Open settings UI:"
-echo "    python3 $TOOLS_DIR/configure.py"
+echo "    $PYTHON_CMD $TOOLS_DIR/configure.py"
 echo ""
 echo "    # In Claude Code, use /speak to toggle"
 echo ""
