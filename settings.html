@@ -1,0 +1,1432 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>claude-speak Settings</title>
+    <style>
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        :root {
+            --bg: #0d1117;
+            --surface: #161b22;
+            --surface-2: #1c2129;
+            --border: #30363d;
+            --border-light: #3d444d;
+            --text: #e6edf3;
+            --text-muted: #8b949e;
+            --text-dim: #6e7681;
+            --accent: #7c3aed;
+            --accent-hover: #6d28d9;
+            --accent-glow: rgba(124, 58, 237, 0.15);
+            --green: #3fb950;
+            --green-dim: rgba(63, 185, 80, 0.15);
+            --red: #f85149;
+            --red-dim: rgba(248, 81, 73, 0.15);
+            --orange: #d29922;
+            --blue: #58a6ff;
+            --radius: 8px;
+            --radius-lg: 12px;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.5;
+            min-height: 100vh;
+        }
+
+        /* ─── Header ─────────────────────────────────────── */
+
+        header {
+            background: var(--surface);
+            border-bottom: 1px solid var(--border);
+            padding: 16px 24px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .header-left h1 {
+            font-size: 18px;
+            font-weight: 600;
+            letter-spacing: -0.3px;
+        }
+
+        .header-left .tagline {
+            color: var(--text-muted);
+            font-size: 13px;
+        }
+
+        .logo {
+            width: 32px;
+            height: 32px;
+            background: var(--accent);
+            border-radius: var(--radius);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 16px;
+            flex-shrink: 0;
+        }
+
+        .status-badges {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+
+        .badge {
+            font-size: 12px;
+            padding: 3px 10px;
+            border-radius: 20px;
+            font-weight: 500;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .badge-running {
+            background: var(--green-dim);
+            color: var(--green);
+        }
+
+        .badge-stopped {
+            background: var(--red-dim);
+            color: var(--red);
+        }
+
+        .badge-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: currentColor;
+        }
+
+        .badge-running .badge-dot { animation: pulse 2s infinite; }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.4; }
+        }
+
+        .monitor-btn {
+            font-size: 12px;
+            padding: 4px 14px;
+            border-radius: 6px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.15s;
+            border: 1px solid transparent;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .monitor-btn-start {
+            background: var(--green-dim);
+            color: var(--green);
+            border-color: rgba(63, 185, 80, 0.3);
+        }
+
+        .monitor-btn-start:hover {
+            background: rgba(63, 185, 80, 0.25);
+        }
+
+        .monitor-btn-stop {
+            background: var(--red-dim);
+            color: var(--red);
+            border-color: rgba(248, 81, 73, 0.3);
+        }
+
+        .monitor-btn-stop:hover {
+            background: rgba(248, 81, 73, 0.25);
+        }
+
+        .monitor-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        /* ─── Main Layout ────────────────────────────────── */
+
+        main {
+            max-width: 960px;
+            margin: 0 auto;
+            padding: 24px;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            overflow: hidden;
+        }
+
+        .card-header {
+            padding: 14px 20px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .card-header h2 {
+            font-size: 14px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-muted);
+        }
+
+        .card-body {
+            padding: 20px;
+        }
+
+        /* ─── Project Bar ────────────────────────────────── */
+
+        .project-bar {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+
+        .project-bar label {
+            font-size: 14px;
+            font-weight: 500;
+            color: var(--text-muted);
+            white-space: nowrap;
+        }
+
+        .project-select {
+            flex: 1;
+            min-width: 200px;
+            max-width: 400px;
+            background: var(--surface-2);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            color: var(--text);
+            padding: 8px 12px;
+            font-size: 14px;
+            cursor: pointer;
+            appearance: none;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='%238b949e'%3E%3Cpath d='M2 4l4 4 4-4'/%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: right 10px center;
+            padding-right: 30px;
+        }
+
+        .project-select:focus {
+            outline: none;
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px var(--accent-glow);
+        }
+
+        .speech-toggle {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-left: auto;
+        }
+
+        .speech-toggle label {
+            font-size: 13px;
+            color: var(--text-muted);
+        }
+
+        .toggle-switch {
+            position: relative;
+            width: 44px;
+            height: 24px;
+            cursor: pointer;
+        }
+
+        .toggle-switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+
+        .toggle-slider {
+            position: absolute;
+            inset: 0;
+            background: var(--border-light);
+            border-radius: 24px;
+            transition: background 0.2s;
+        }
+
+        .toggle-slider::before {
+            content: '';
+            position: absolute;
+            width: 18px;
+            height: 18px;
+            left: 3px;
+            top: 3px;
+            background: white;
+            border-radius: 50%;
+            transition: transform 0.2s;
+        }
+
+        .toggle-switch input:checked + .toggle-slider {
+            background: var(--accent);
+        }
+
+        .toggle-switch input:checked + .toggle-slider::before {
+            transform: translateX(20px);
+        }
+
+        .toggle-label {
+            font-size: 13px;
+            font-weight: 500;
+            min-width: 24px;
+        }
+
+        .toggle-label.on { color: var(--green); }
+        .toggle-label.off { color: var(--text-dim); }
+
+        /* ─── Voice Browser ──────────────────────────────── */
+
+        .voice-filters {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 16px;
+            flex-wrap: wrap;
+        }
+
+        .search-input {
+            flex: 1;
+            min-width: 200px;
+            background: var(--surface-2);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            color: var(--text);
+            padding: 8px 12px 8px 34px;
+            font-size: 14px;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' fill='%238b949e'%3E%3Ccircle cx='6' cy='6' r='4.5' stroke='%238b949e' fill='none' stroke-width='1.5'/%3E%3Cline x1='9.5' y1='9.5' x2='13' y2='13' stroke='%238b949e' stroke-width='1.5'/%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: 10px center;
+        }
+
+        .search-input:focus {
+            outline: none;
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px var(--accent-glow);
+        }
+
+        .filter-select {
+            background: var(--surface-2);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            color: var(--text);
+            padding: 8px 12px;
+            font-size: 13px;
+            cursor: pointer;
+            appearance: none;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='%238b949e'%3E%3Cpath d='M2 4l4 4 4-4'/%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: right 8px center;
+            padding-right: 26px;
+        }
+
+        .filter-select:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+
+        .voice-list {
+            max-height: 420px;
+            overflow-y: auto;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+        }
+
+        .voice-list::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        .voice-list::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        .voice-list::-webkit-scrollbar-thumb {
+            background: var(--border-light);
+            border-radius: 3px;
+        }
+
+        .voice-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 10px 16px;
+            border-bottom: 1px solid var(--border);
+            cursor: pointer;
+            transition: background 0.15s;
+        }
+
+        .voice-item:last-child { border-bottom: none; }
+
+        .voice-item:hover {
+            background: var(--surface-2);
+        }
+
+        .voice-item.selected {
+            background: var(--accent-glow);
+            border-left: 3px solid var(--accent);
+            padding-left: 13px;
+        }
+
+        .voice-item.recommended {
+            position: relative;
+        }
+
+        .voice-radio {
+            width: 16px;
+            height: 16px;
+            border: 2px solid var(--border-light);
+            border-radius: 50%;
+            flex-shrink: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: border-color 0.15s;
+        }
+
+        .voice-item.selected .voice-radio {
+            border-color: var(--accent);
+        }
+
+        .voice-item.selected .voice-radio::after {
+            content: '';
+            width: 8px;
+            height: 8px;
+            background: var(--accent);
+            border-radius: 50%;
+        }
+
+        .voice-info {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .voice-name {
+            font-size: 14px;
+            font-weight: 500;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .voice-friendly {
+            font-size: 12px;
+            color: var(--text-muted);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .voice-badges {
+            display: flex;
+            gap: 6px;
+            flex-shrink: 0;
+        }
+
+        .voice-badge {
+            font-size: 11px;
+            padding: 2px 7px;
+            border-radius: 4px;
+            font-weight: 500;
+        }
+
+        .voice-badge.male {
+            background: rgba(88, 166, 255, 0.15);
+            color: var(--blue);
+        }
+
+        .voice-badge.female {
+            background: rgba(210, 153, 34, 0.15);
+            color: var(--orange);
+        }
+
+        .voice-badge.locale {
+            background: rgba(139, 148, 158, 0.12);
+            color: var(--text-muted);
+        }
+
+        .voice-badge.star {
+            background: rgba(210, 153, 34, 0.2);
+            color: var(--orange);
+            font-size: 10px;
+        }
+
+        .preview-btn {
+            background: none;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            color: var(--text-muted);
+            padding: 5px 12px;
+            font-size: 12px;
+            cursor: pointer;
+            transition: all 0.15s;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            white-space: nowrap;
+            flex-shrink: 0;
+        }
+
+        .preview-btn:hover {
+            border-color: var(--accent);
+            color: var(--accent);
+            background: var(--accent-glow);
+        }
+
+        .preview-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .preview-btn.loading {
+            pointer-events: none;
+        }
+
+        .voice-count {
+            font-size: 12px;
+            color: var(--text-dim);
+        }
+
+        .no-results {
+            padding: 40px 20px;
+            text-align: center;
+            color: var(--text-muted);
+            font-size: 14px;
+        }
+
+        /* ─── Preview Text ───────────────────────────────── */
+
+        .preview-text-area {
+            width: 100%;
+            background: var(--surface-2);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            color: var(--text);
+            padding: 12px 16px;
+            font-size: 14px;
+            font-family: inherit;
+            resize: vertical;
+            min-height: 70px;
+            max-height: 200px;
+            line-height: 1.5;
+        }
+
+        .preview-text-area:focus {
+            outline: none;
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px var(--accent-glow);
+        }
+
+        .preview-text-area::placeholder {
+            color: var(--text-dim);
+        }
+
+        .preview-controls {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-top: 12px;
+        }
+
+        /* ─── Settings ───────────────────────────────────── */
+
+        .settings-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+
+        .setting-group {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .setting-label {
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--text-muted);
+        }
+
+        .setting-value {
+            font-size: 13px;
+            color: var(--text);
+            font-family: 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
+        }
+
+        .rate-control {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .rate-slider {
+            flex: 1;
+            -webkit-appearance: none;
+            appearance: none;
+            height: 4px;
+            background: var(--border);
+            border-radius: 2px;
+            outline: none;
+        }
+
+        .rate-slider::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 16px;
+            height: 16px;
+            background: var(--accent);
+            border-radius: 50%;
+            cursor: pointer;
+            transition: transform 0.1s;
+        }
+
+        .rate-slider::-webkit-slider-thumb:hover {
+            transform: scale(1.2);
+        }
+
+        .rate-slider::-moz-range-thumb {
+            width: 16px;
+            height: 16px;
+            background: var(--accent);
+            border-radius: 50%;
+            cursor: pointer;
+            border: none;
+        }
+
+        .rate-value {
+            font-size: 14px;
+            font-weight: 600;
+            min-width: 50px;
+            text-align: right;
+            font-family: 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
+            color: var(--accent);
+        }
+
+        /* ─── Actions ────────────────────────────────────── */
+
+        .actions-bar {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            justify-content: space-between;
+        }
+
+        .btn {
+            padding: 9px 20px;
+            border-radius: var(--radius);
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.15s;
+            border: 1px solid transparent;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .btn-primary {
+            background: var(--accent);
+            color: white;
+            border-color: var(--accent);
+        }
+
+        .btn-primary:hover {
+            background: var(--accent-hover);
+        }
+
+        .btn-primary:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .btn-secondary {
+            background: var(--surface-2);
+            color: var(--text);
+            border-color: var(--border);
+        }
+
+        .btn-secondary:hover {
+            border-color: var(--border-light);
+            background: var(--border);
+        }
+
+        .btn-ghost {
+            background: none;
+            color: var(--text-muted);
+            border: none;
+            padding: 9px 12px;
+        }
+
+        .btn-ghost:hover {
+            color: var(--text);
+        }
+
+        .save-feedback {
+            font-size: 13px;
+            color: var(--green);
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+
+        .save-feedback.visible { opacity: 1; }
+
+        /* ─── Loading ────────────────────────────────────── */
+
+        .loading-spinner {
+            display: inline-block;
+            width: 14px;
+            height: 14px;
+            border: 2px solid var(--border);
+            border-top-color: var(--accent);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .skeleton {
+            background: linear-gradient(90deg, var(--surface-2) 25%, var(--border) 50%, var(--surface-2) 75%);
+            background-size: 200% 100%;
+            animation: shimmer 1.5s infinite;
+            border-radius: var(--radius);
+        }
+
+        @keyframes shimmer {
+            0% { background-position: 200% 0; }
+            100% { background-position: -200% 0; }
+        }
+
+        .skeleton-row {
+            height: 48px;
+            margin-bottom: 1px;
+        }
+
+        /* ─── Toast ──────────────────────────────────────── */
+
+        .toast {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 12px 20px;
+            font-size: 14px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+            z-index: 1000;
+            transform: translateY(100px);
+            opacity: 0;
+            transition: all 0.3s ease;
+        }
+
+        .toast.visible {
+            transform: translateY(0);
+            opacity: 1;
+        }
+
+        .toast.error { border-color: var(--red); }
+        .toast.success { border-color: var(--green); }
+
+        /* ─── Audio Player ───────────────────────────────── */
+
+        .audio-player {
+            display: none;
+        }
+
+        /* ─── Responsive ─────────────────────────────────── */
+
+        @media (max-width: 640px) {
+            main { padding: 16px; }
+            .settings-grid { grid-template-columns: 1fr; }
+            .voice-filters { flex-direction: column; }
+            .search-input { min-width: unset; }
+            header { padding: 12px 16px; }
+            .header-left .tagline { display: none; }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="header-left">
+            <div class="logo">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2">
+                    <polygon points="11 5 6 9 6 15 11 19 16 15 16 9"/>
+                    <line x1="11" y1="5" x2="11" y2="19"/>
+                </svg>
+            </div>
+            <div>
+                <h1>claude-speak</h1>
+                <div class="tagline">Free TTS for Claude Code</div>
+            </div>
+        </div>
+        <div class="status-badges" id="statusBadges">
+            <span class="badge badge-stopped">
+                <span class="badge-dot"></span>
+                No monitors
+            </span>
+        </div>
+    </header>
+
+    <main>
+        <!-- Project Selection + Speech Toggle -->
+        <div class="card">
+            <div class="card-body">
+                <div class="project-bar">
+                    <label for="projectSelect">Project:</label>
+                    <select id="projectSelect" class="project-select">
+                        <option value="">Global (all projects)</option>
+                    </select>
+
+                    <div class="speech-toggle">
+                        <label>Speech</label>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="speechToggle" checked>
+                            <span class="toggle-slider"></span>
+                        </label>
+                        <span class="toggle-label on" id="toggleLabel">ON</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Voice Browser -->
+        <div class="card">
+            <div class="card-header">
+                <h2>Voice Selection</h2>
+                <span class="voice-count" id="voiceCount">Loading voices...</span>
+            </div>
+            <div class="card-body">
+                <div class="voice-filters">
+                    <input type="text" class="search-input" id="voiceSearch" placeholder="Search voices...">
+                    <select class="filter-select" id="langFilter">
+                        <option value="">All Languages</option>
+                    </select>
+                    <select class="filter-select" id="genderFilter">
+                        <option value="">All Genders</option>
+                        <option value="Male">Male</option>
+                        <option value="Female">Female</option>
+                    </select>
+                </div>
+                <div class="voice-list" id="voiceList">
+                    <div class="skeleton skeleton-row"></div>
+                    <div class="skeleton skeleton-row"></div>
+                    <div class="skeleton skeleton-row"></div>
+                    <div class="skeleton skeleton-row"></div>
+                    <div class="skeleton skeleton-row"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Preview Text -->
+        <div class="card">
+            <div class="card-header">
+                <h2>Test Preview</h2>
+            </div>
+            <div class="card-body">
+                <textarea class="preview-text-area" id="previewText" placeholder="Type text to preview with the selected voice...">Hello! I'm your Claude Code assistant. Let me help you write better code today.</textarea>
+                <div class="preview-controls">
+                    <button class="btn btn-secondary" id="previewBtn" onclick="previewSelected()">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21"/></svg>
+                        Preview Selected Voice
+                    </button>
+                    <button class="btn btn-ghost" id="stopBtn" onclick="stopAudio()" style="display:none">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12"/></svg>
+                        Stop
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Settings -->
+        <div class="card">
+            <div class="card-header">
+                <h2>Settings</h2>
+            </div>
+            <div class="card-body">
+                <div class="settings-grid">
+                    <div class="setting-group">
+                        <span class="setting-label">Speech Rate</span>
+                        <div class="rate-control">
+                            <span class="setting-value">-50%</span>
+                            <input type="range" class="rate-slider" id="rateSlider" min="-50" max="100" step="5" value="10">
+                            <span class="setting-value">+100%</span>
+                        </div>
+                        <div style="text-align:center">
+                            <span class="rate-value" id="rateValue">+10%</span>
+                        </div>
+                    </div>
+                    <div class="setting-group">
+                        <span class="setting-label">Current Voice</span>
+                        <span class="setting-value" id="currentVoiceDisplay">en-US-GuyNeural</span>
+                        <span class="setting-label" style="margin-top:8px">Effective Voice</span>
+                        <span class="setting-value" id="effectiveVoiceDisplay" style="color:var(--accent)">en-US-GuyNeural</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Save Actions -->
+        <div class="actions-bar">
+            <div style="display:flex;gap:8px;align-items:center">
+                <button class="btn btn-primary" id="saveBtn" onclick="saveSettings()">Save Settings</button>
+                <button class="btn btn-secondary" onclick="resetToDefault()">Reset to Default</button>
+                <span class="save-feedback" id="saveFeedback">Settings saved!</span>
+            </div>
+            <button class="btn btn-ghost" onclick="refreshAll()">Refresh</button>
+        </div>
+    </main>
+
+    <!-- Hidden audio element -->
+    <audio id="audioPlayer" class="audio-player"></audio>
+
+    <!-- Toast notification -->
+    <div class="toast" id="toast"></div>
+
+    <script>
+        // ─── State ──────────────────────────────────────────────────────────
+        let allVoices = [];
+        let filteredVoices = [];
+        let selectedVoice = 'en-US-GuyNeural';
+        let selectedProject = '';
+        let currentSettings = {};
+        let isPlaying = false;
+
+        const RECOMMENDED = [
+            'en-US-GuyNeural',
+            'en-US-AndrewMultilingualNeural',
+            'en-GB-RyanNeural',
+            'en-US-AriaNeural',
+            'en-US-JennyNeural',
+            'en-GB-SoniaNeural',
+        ];
+
+        const audioPlayer = document.getElementById('audioPlayer');
+
+        function esc(str) {
+            const d = document.createElement('div');
+            d.textContent = str || '';
+            return d.innerHTML;
+        }
+
+        // ─── API ────────────────────────────────────────────────────────────
+
+        async function api(path, options = {}) {
+            try {
+                const res = await fetch(path, options);
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+                return data;
+            } catch (e) {
+                if (e.message.includes('Failed to fetch')) {
+                    showToast('Cannot reach settings server. Is configure.py running?', 'error');
+                }
+                throw e;
+            }
+        }
+
+        async function fetchVoices() {
+            return api('/api/voices');
+        }
+
+        async function fetchProjects() {
+            return api('/api/projects');
+        }
+
+        async function fetchSettings(project) {
+            const url = project ? `/api/settings?project=${encodeURIComponent(project)}` : '/api/settings';
+            return api(url);
+        }
+
+        async function fetchStatus() {
+            return api('/api/status');
+        }
+
+        async function postPreview(voice, text, rate) {
+            return api('/api/preview', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ voice, text, rate }),
+            });
+        }
+
+        async function postSettings(project, voice, paused) {
+            return api('/api/settings', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ project: project || null, voice, paused }),
+            });
+        }
+
+        // ─── Rendering ─────────────────────────────────────────────────────
+
+        function renderVoices() {
+            const search = document.getElementById('voiceSearch').value.toLowerCase();
+            const langFilter = document.getElementById('langFilter').value;
+            const genderFilter = document.getElementById('genderFilter').value;
+
+            filteredVoices = allVoices.filter(v => {
+                const name = (v.ShortName || '').toLowerCase();
+                const friendly = (v.FriendlyName || '').toLowerCase();
+                if (search && !name.includes(search) && !friendly.includes(search)) return false;
+                if (langFilter && v.Locale !== langFilter) return false;
+                if (genderFilter && v.Gender !== genderFilter) return false;
+                return true;
+            });
+
+            // Sort: recommended first, then alphabetical
+            filteredVoices.sort((a, b) => {
+                const aRec = RECOMMENDED.includes(a.ShortName) ? 0 : 1;
+                const bRec = RECOMMENDED.includes(b.ShortName) ? 0 : 1;
+                if (aRec !== bRec) return aRec - bRec;
+                return (a.ShortName || '').localeCompare(b.ShortName || '');
+            });
+
+            const list = document.getElementById('voiceList');
+            document.getElementById('voiceCount').textContent = `${filteredVoices.length} of ${allVoices.length} voices`;
+
+            if (filteredVoices.length === 0) {
+                list.innerHTML = '<div class="no-results">No voices match your filters</div>';
+                return;
+            }
+
+            list.innerHTML = filteredVoices.map(v => {
+                const isSelected = v.ShortName === selectedVoice;
+                const isRec = RECOMMENDED.includes(v.ShortName);
+                const locale = esc((v.Locale || '').split('-').slice(1).join('-') || v.Locale);
+                const gender = esc(v.Gender || '');
+                const genderClass = gender === 'Male' ? 'male' : gender === 'Female' ? 'female' : '';
+                const shortName = esc(v.ShortName);
+                const friendly = esc(v.FriendlyName || '');
+
+                return `
+                    <div class="voice-item ${isSelected ? 'selected' : ''} ${isRec ? 'recommended' : ''}"
+                         onclick="selectVoice('${esc(v.ShortName)}')"
+                         data-voice="${esc(v.ShortName)}">
+                        <div class="voice-radio"></div>
+                        <div class="voice-info">
+                            <div class="voice-name">
+                                ${shortName}
+                                ${isRec ? '<span class="voice-badge star">recommended</span>' : ''}
+                            </div>
+                            <div class="voice-friendly">${friendly}</div>
+                        </div>
+                        <div class="voice-badges">
+                            ${gender ? `<span class="voice-badge ${genderClass}">${gender}</span>` : ''}
+                            <span class="voice-badge locale">${locale}</span>
+                        </div>
+                        <button class="preview-btn" onclick="event.stopPropagation(); previewVoice('${esc(v.ShortName)}')" title="Preview this voice">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21"/></svg>
+                        </button>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function renderLanguageFilter() {
+            const locales = [...new Set(allVoices.map(v => v.Locale).filter(Boolean))].sort();
+            const select = document.getElementById('langFilter');
+
+            // Group by language
+            const langs = {};
+            locales.forEach(loc => {
+                const lang = loc.split('-')[0];
+                if (!langs[lang]) langs[lang] = [];
+                langs[lang].push(loc);
+            });
+
+            let html = '<option value="">All Languages</option>';
+
+            // Common languages first
+            const common = ['en', 'de', 'fr', 'es', 'it', 'pt', 'ja', 'ko', 'zh'];
+            const sortedLangs = Object.keys(langs).sort((a, b) => {
+                const aIdx = common.indexOf(a);
+                const bIdx = common.indexOf(b);
+                if (aIdx >= 0 && bIdx >= 0) return aIdx - bIdx;
+                if (aIdx >= 0) return -1;
+                if (bIdx >= 0) return 1;
+                return a.localeCompare(b);
+            });
+
+            sortedLangs.forEach(lang => {
+                const locs = langs[lang];
+                if (locs.length === 1) {
+                    html += `<option value="${locs[0]}">${locs[0]}</option>`;
+                } else {
+                    html += `<optgroup label="${lang.toUpperCase()}">`;
+                    locs.forEach(loc => {
+                        html += `<option value="${loc}">${loc}</option>`;
+                    });
+                    html += '</optgroup>';
+                }
+            });
+
+            select.innerHTML = html;
+        }
+
+        function timeAgo(ts) {
+            const mins = Math.floor((Date.now() / 1000 - ts) / 60);
+            if (mins < 1) return 'just now';
+            if (mins < 60) return `${mins}m ago`;
+            const hrs = Math.floor(mins / 60);
+            if (hrs < 24) return `${hrs}h ago`;
+            return `${Math.floor(hrs / 24)}d ago`;
+        }
+
+        function renderProjects(projects) {
+            const select = document.getElementById('projectSelect');
+            let html = '<option value="">Global (all projects)</option>';
+
+            projects.forEach(p => {
+                const label = esc(p.name || p.path);
+                const ago = p.last_active ? ` (${timeAgo(p.last_active)})` : '';
+                const paused = p.paused ? ' [paused]' : '';
+                html += `<option value="${esc(p.path)}">${label}${ago}${paused}</option>`;
+            });
+
+            select.innerHTML = html;
+        }
+
+        function renderStatus(data) {
+            const container = document.getElementById('statusBadges');
+            const running = (data.monitors || []).filter(m => m.running);
+
+            if (running.length === 0) {
+                container.innerHTML = `
+                    <button class="monitor-btn monitor-btn-start" onclick="startMonitor()">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21"/></svg>
+                        Start Monitor
+                    </button>
+                    <span class="badge badge-stopped">
+                        <span class="badge-dot"></span>
+                        Not running
+                    </span>`;
+            } else {
+                container.innerHTML = running.map(m => `
+                    <span class="badge badge-running">
+                        <span class="badge-dot"></span>
+                        ${esc(m.name)} (PID ${m.pid})
+                    </span>
+                    <button class="monitor-btn monitor-btn-stop" onclick="stopMonitor(${m.pid})">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12"/></svg>
+                        Stop
+                    </button>
+                `).join('');
+            }
+        }
+
+        function updateToggle(paused) {
+            const toggle = document.getElementById('speechToggle');
+            const label = document.getElementById('toggleLabel');
+            toggle.checked = !paused;
+            label.textContent = paused ? 'OFF' : 'ON';
+            label.className = 'toggle-label ' + (paused ? 'off' : 'on');
+        }
+
+        function updateCurrentVoice() {
+            document.getElementById('currentVoiceDisplay').textContent =
+                currentSettings.voice || '(default)';
+
+            const effective = currentSettings.voice || currentSettings.global_voice || 'en-US-GuyNeural';
+            document.getElementById('effectiveVoiceDisplay').textContent = effective;
+        }
+
+        // ─── Actions ────────────────────────────────────────────────────────
+
+        function selectVoice(voiceName) {
+            selectedVoice = voiceName;
+            renderVoices();
+        }
+
+        async function previewVoice(voiceName) {
+            const text = document.getElementById('previewText').value.trim();
+            if (!text) {
+                showToast('Enter some text to preview', 'error');
+                return;
+            }
+
+            const rate = getRateString();
+            const btn = document.querySelector(`[data-voice="${voiceName}"] .preview-btn`);
+
+            if (btn) {
+                btn.innerHTML = '<span class="loading-spinner"></span>';
+                btn.disabled = true;
+            }
+
+            try {
+                stopAudio();
+                const result = await postPreview(voiceName, text, rate);
+                if (result.url) {
+                    audioPlayer.src = result.url;
+                    audioPlayer.play();
+                    isPlaying = true;
+                    document.getElementById('stopBtn').style.display = '';
+                }
+            } catch (e) {
+                showToast('Preview failed: ' + e.message, 'error');
+            } finally {
+                if (btn) {
+                    btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21"/></svg>';
+                    btn.disabled = false;
+                }
+            }
+        }
+
+        function previewSelected() {
+            previewVoice(selectedVoice);
+        }
+
+        function stopAudio() {
+            audioPlayer.pause();
+            audioPlayer.currentTime = 0;
+            isPlaying = false;
+            document.getElementById('stopBtn').style.display = 'none';
+        }
+
+        audioPlayer.addEventListener('ended', () => {
+            isPlaying = false;
+            document.getElementById('stopBtn').style.display = 'none';
+        });
+
+        function getRateString() {
+            const val = parseInt(document.getElementById('rateSlider').value);
+            if (val >= 0) return `+${val}%`;
+            return `${val}%`;
+        }
+
+        async function saveSettings() {
+            const btn = document.getElementById('saveBtn');
+            btn.disabled = true;
+            btn.innerHTML = '<span class="loading-spinner"></span> Saving...';
+
+            try {
+                const paused = !document.getElementById('speechToggle').checked;
+                await postSettings(selectedProject, selectedVoice, paused);
+
+                const feedback = document.getElementById('saveFeedback');
+                feedback.classList.add('visible');
+                setTimeout(() => feedback.classList.remove('visible'), 2500);
+                showToast('Settings saved!', 'success');
+
+                // Refresh settings
+                await loadSettings();
+            } catch (e) {
+                showToast('Save failed: ' + e.message, 'error');
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = 'Save Settings';
+            }
+        }
+
+        function resetToDefault() {
+            selectedVoice = 'en-US-GuyNeural';
+            document.getElementById('rateSlider').value = 10;
+            document.getElementById('rateValue').textContent = '+10%';
+            document.getElementById('speechToggle').checked = true;
+            updateToggle(false);
+            renderVoices();
+            updateCurrentVoice();
+        }
+
+        async function refreshAll() {
+            await init();
+            showToast('Refreshed', 'success');
+        }
+
+        // ─── Monitor Control ────────────────────────────────────────────────
+
+        async function startMonitor() {
+            const rate = getRateString();
+            const project = selectedProject || undefined;
+
+            // Disable button while starting
+            const btns = document.querySelectorAll('.monitor-btn-start');
+            btns.forEach(b => { b.disabled = true; b.innerHTML = '<span class="loading-spinner"></span> Starting...'; });
+
+            try {
+                const result = await api('/api/monitor/start', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        project: project || null,
+                        voice: selectedVoice,
+                        rate: rate,
+                    }),
+                });
+
+                if (result.ok) {
+                    const mode = result.mode === 'global' ? 'Global monitor' : 'Project monitor';
+                    showToast(`${mode} started (PID ${result.pid})`, 'success');
+                }
+            } catch (e) {
+                showToast('Failed to start monitor: ' + e.message, 'error');
+            }
+
+            // Refresh status after a short delay (give the process time to write PID file)
+            setTimeout(async () => {
+                try {
+                    const status = await fetchStatus();
+                    renderStatus(status);
+                } catch (e) {}
+            }, 1500);
+        }
+
+        async function stopMonitor(pid) {
+            const btns = document.querySelectorAll('.monitor-btn-stop');
+            btns.forEach(b => { b.disabled = true; b.innerHTML = '<span class="loading-spinner"></span>'; });
+
+            try {
+                await api('/api/monitor/stop', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ pid }),
+                });
+                showToast('Monitor stopped', 'success');
+            } catch (e) {
+                showToast('Failed to stop monitor: ' + e.message, 'error');
+            }
+
+            // Refresh status
+            setTimeout(async () => {
+                try {
+                    const status = await fetchStatus();
+                    renderStatus(status);
+                } catch (e) {}
+            }, 500);
+        }
+
+        // ─── Settings Load ──────────────────────────────────────────────────
+
+        async function loadSettings() {
+            try {
+                currentSettings = await fetchSettings(selectedProject);
+                updateToggle(currentSettings.paused);
+
+                if (currentSettings.voice) {
+                    selectedVoice = currentSettings.voice;
+                } else if (currentSettings.global_voice) {
+                    selectedVoice = currentSettings.global_voice;
+                }
+
+                updateCurrentVoice();
+                renderVoices();
+            } catch (e) {
+                // Non-fatal
+            }
+        }
+
+        // ─── Event Listeners ────────────────────────────────────────────────
+
+        document.getElementById('voiceSearch').addEventListener('input', renderVoices);
+        document.getElementById('langFilter').addEventListener('change', renderVoices);
+        document.getElementById('genderFilter').addEventListener('change', renderVoices);
+
+        document.getElementById('projectSelect').addEventListener('change', async (e) => {
+            selectedProject = e.target.value;
+            await loadSettings();
+        });
+
+        document.getElementById('speechToggle').addEventListener('change', (e) => {
+            updateToggle(!e.target.checked);
+        });
+
+        document.getElementById('rateSlider').addEventListener('input', (e) => {
+            const val = parseInt(e.target.value);
+            document.getElementById('rateValue').textContent = val >= 0 ? `+${val}%` : `${val}%`;
+        });
+
+        // Keyboard shortcuts
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') stopAudio();
+            if (e.key === ' ' && document.activeElement.tagName !== 'TEXTAREA' && document.activeElement.tagName !== 'INPUT') {
+                e.preventDefault();
+                if (isPlaying) stopAudio();
+                else previewSelected();
+            }
+        });
+
+        // ─── Toast ──────────────────────────────────────────────────────────
+
+        function showToast(message, type = 'info') {
+            const toast = document.getElementById('toast');
+            toast.textContent = message;
+            toast.className = `toast ${type} visible`;
+            setTimeout(() => toast.classList.remove('visible'), 3000);
+        }
+
+        // ─── Init ───────────────────────────────────────────────────────────
+
+        async function init() {
+            try {
+                // Load voices
+                const voices = await fetchVoices();
+                if (Array.isArray(voices)) {
+                    allVoices = voices;
+                    renderLanguageFilter();
+                    renderVoices();
+                }
+            } catch (e) {
+                showToast('Failed to load voices: ' + e.message, 'error');
+            }
+
+            try {
+                // Load projects
+                const projects = await fetchProjects();
+                if (Array.isArray(projects)) {
+                    renderProjects(projects);
+                }
+            } catch (e) {
+                // Non-fatal
+            }
+
+            try {
+                // Load settings
+                await loadSettings();
+            } catch (e) {
+                // Non-fatal
+            }
+
+            try {
+                // Load status
+                const status = await fetchStatus();
+                renderStatus(status);
+            } catch (e) {
+                // Non-fatal
+            }
+        }
+
+        // Auto-refresh status every 10 seconds
+        setInterval(async () => {
+            try {
+                const status = await fetchStatus();
+                renderStatus(status);
+            } catch (e) {}
+        }, 10000);
+
+        // Start
+        init();
+    </script>
+</body>
+</html>
